@@ -75,8 +75,10 @@ function stream:write(data)
     if data == "" then
         return
     end
+    if self._writebuf == "" then
+        open_write(self)
+    end
     self._writebuf = self._writebuf .. data
-    open_write(self)
 end
 function stream:is_closed()
     return self.shutdown_w and self.shutdown_r
