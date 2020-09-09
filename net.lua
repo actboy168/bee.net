@@ -165,10 +165,10 @@ function listen_mt:__newindex(name, func)
     end
 end
 function listen:is_closed()
-    return self.closed
+    return self.shutdown_r
 end
 function listen:close()
-    self.closed = true
+    self.shutdown_r = true
     fd_clr_read(self._fd)
     close(self)
 end
@@ -193,7 +193,8 @@ local function new_listen(fd)
     local s = {
         _fd = fd,
         _event = {},
-        closed = false,
+        shutdown_r = false,
+        shutdown_w = true,
     }
     map[fd] = s
     fd_set_read(fd)
@@ -207,9 +208,6 @@ function connect_mt:__newindex(name, func)
     if name:sub(1, 3) == "on_" then
         self._event[name:sub(4)] = func
     end
-end
-function connect:recv()
-    return ""
 end
 function connect:write(data)
     if data == "" then
