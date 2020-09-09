@@ -1,55 +1,48 @@
 local socket = require "bee.socket"
 
-local rds = {}
-local wds = {}
+local readfds = {}
+local writefds = {}
 local map = {}
+
+local function FD_SET(set, fd)
+    for i = 1, #set do
+        if fd == set[i] then
+            return
+        end
+    end
+    set[#set+1] = fd
+end
+
+local function FD_CLR(set, fd)
+    for i = 1, #set do
+        if fd == set[i] then
+            set[i] = set[#set]
+            set[#set] = nil
+            return
+        end
+    end
+end
+
+local function fd_set_read(fd)
+    FD_SET(readfds, fd)
+end
+
+local function fd_clr_read(fd)
+    FD_CLR(readfds, fd)
+end
+
+local function fd_set_write(fd)
+    FD_SET(writefds, fd)
+end
+
+local function fd_clr_write(fd)
+    FD_CLR(writefds, fd)
+end
 
 local function on_event(self, name, ...)
     local f = self._event[name]
     if f then
         f(self, ...)
-    end
-end
-
-local function open_read(self)
-    local fd = self._fd
-    for _, r in ipairs(rds) do
-        if r == fd then
-            return
-        end
-    end
-    rds[#rds+1] = fd
-end
-
-local function open_write(self)
-    local fd = self._fd
-    for _, w in ipairs(wds) do
-        if w == fd then
-            return
-        end
-    end
-    wds[#wds+1] = fd
-end
-
-local function close_read(self)
-    local fd = self._fd
-    for i, f in ipairs(rds) do
-        if f == fd then
-            rds[i] = rds[#rds]
-            rds[#rds] = nil
-            return
-        end
-    end
-end
-
-local function close_write(self)
-    local fd = self._fd
-    for i, f in ipairs(wds) do
-        if f == fd then
-            wds[i] = wds[#wds]
-            wds[#wds] = nil
-            return
-        end
     end
 end
 
@@ -76,7 +69,7 @@ function stream:write(data)
         return
     end
     if self._writebuf == "" then
-        open_write(self)
+        fd_set_write(self._fd)
     end
     self._writebuf = self._writebuf .. data
 end
@@ -84,11 +77,13 @@ function stream:is_closed()
     return self.shutdown_w and self.shutdown_r
 end
 function stream:close()
-    self.shutdown_r = true
-    close_read(self)
+    if not self.shutdown_r then
+        self.shutdown_r = true
+        fd_clr_read(self._fd)
+    end
     if self.shutdown_w or self._writebuf == ""  then
         self.shutdown_w = true
-        close_write(self)
+        fd_clr_write(self._fd)
         close(self)
     end
 end
@@ -109,10 +104,10 @@ function stream:update(timeout)
         end
     end
 end
-function stream:close_w()
-    close_write(self)
+local function close_write(self)
+    fd_clr_write(self._fd)
     if self.shutdown_r then
-        close_read(self)
+        fd_clr_read(self._fd)
         close(self)
     end
 end
@@ -129,35 +124,34 @@ function stream:select_w()
     local n = self._fd:send(self._writebuf)
     if n == nil then
         self.shutdown_w = true
-        self:close_w()
+        close_write(self)
     else
         self._writebuf = self._writebuf:sub(n + 1)
         if self._writebuf == "" then
-            self:close_w()
+            close_write(self)
         end
     end
 end
 
 local function accept_stream(fd)
-    local s = {
+    local self = setmetatable({
         _fd = fd,
         _event = {},
         _writebuf = "",
         shutdown_r = false,
         shutdown_w = false,
-    }
-    map[fd] = s
-    open_read(s)
-    return setmetatable(s, stream_mt)
+    }, stream_mt)
+    map[fd] = self
+    fd_set_read(fd)
+    return self
 end
-local function connect_stream(fd)
-    local s = map[fd]
-    setmetatable(s, stream_mt)
-    open_read(s)
-    if s._writebuf ~= "" then
-        stream.select_w(s)
+local function connect_stream(self)
+    setmetatable(self, stream_mt)
+    fd_set_read(self._fd)
+    if self._writebuf ~= "" then
+        self:select_w()
     else
-        close_write(s)
+        fd_clr_write(self._fd)
     end
 end
 
@@ -175,7 +169,7 @@ function listen:is_closed()
 end
 function listen:close()
     self.closed = true
-    close_read(self)
+    fd_clr_read(self._fd)
     close(self)
 end
 function listen:update(timeout)
@@ -202,6 +196,7 @@ local function new_listen(fd)
         closed = false,
     }
     map[fd] = s
+    fd_set_read(fd)
     return setmetatable(s, listen_mt)
 end
 
@@ -227,7 +222,7 @@ function connect:is_closed()
 end
 function connect:close()
     self.shutdown_w = true
-    close_write(self)
+    fd_clr_write(self._fd)
     close(self)
 end
 function connect:update(timeout)
@@ -243,11 +238,11 @@ end
 function connect:select_w()
     local ok, err = self._fd:status()
     if ok then
-        connect_stream(self._fd)
+        connect_stream(self)
         on_event(self, "connect")
     else
         on_event(self, "error", err)
-        close(self)
+        self:close()
     end
 end
 local function new_connect(fd)
@@ -259,6 +254,7 @@ local function new_connect(fd)
         shutdown_w = false,
     }
     map[fd] = s
+    fd_set_write(fd)
     return setmetatable(s, connect_mt)
 end
 
@@ -269,7 +265,6 @@ function m.listen(...)
     if not fd then
         return fd, err
     end
-    rds[#rds+1] = fd
     return new_listen(fd)
 end
 
@@ -278,18 +273,19 @@ function m.connect(...)
     if not fd then
         return fd, err
     end
-    wds[#wds+1] = fd
     return new_connect(fd)
 end
 
 function m.update(timeout)
-    local rd, wr = socket.select(rds, wds, timeout or 0)
+    local rd, wr = socket.select(readfds, writefds, timeout or 0)
     if rd then
-        for _, fd in ipairs(rd) do
+        for i = 1, #rd do
+            local fd = rd[i]
             local s = map[fd]
             s:select_r()
         end
-        for _, fd in ipairs(wr) do
+        for i = 1, #wr do
+            local fd = wr[i]
             local s = map[fd]
             s:select_w()
         end
