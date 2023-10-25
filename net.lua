@@ -177,7 +177,16 @@ local function new_listen(fd)
         shutdown_w = true,
     }
     selector:event_add(fd, SELECT_READ, function ()
-        local newfd = fd:accept()
+        local newfd, err = fd:accept()
+        if not newfd then
+            on_event(s, "error", err)
+            return
+        end
+        local ok, err = newfd:status()
+        if not ok then
+            on_event(s, "error", err)
+            return
+        end
         if newfd:status() then
             local news = accept_stream(newfd)
             on_event(s, "accept", news)
