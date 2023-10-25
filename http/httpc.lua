@@ -24,13 +24,13 @@ local function gen_interface(fd)
     end
     local function read(sz)
         if sz == nil then
-            fd:update()
+            net.update()
             local r = rbuf
             rbuf = ""
             return r
         else
             while not fd:is_closed() do
-                fd:update()
+                net.update()
                 if #rbuf >= sz then
                     local r = rbuf:sub(1, sz)
                     rbuf = rbuf:sub(sz + 1)
