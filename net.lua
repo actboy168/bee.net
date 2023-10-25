@@ -84,23 +84,6 @@ function stream:close()
         close(self)
     end
 end
-function stream:update(timeout)
-    local fd = self._fd
-    local r = {fd}
-    local w = r
-    if self._writebuf == "" then
-        w = nil
-    end
-    local rd, wr = socket.select(r, w, timeout or 0)
-    if rd then
-        if #rd > 0 then
-            self:select_r()
-        end
-        if #wr > 0 then
-            self:select_w()
-        end
-    end
-end
 local function close_write(self)
     fd_clr_write(self)
     if self.shutdown_r then
