@@ -1,5 +1,7 @@
 local socket = require "bee.socket"
 local select = require "bee.select"
+local fs = require "bee.filesystem"
+
 local selector = select.create()
 local SELECT_READ <const> = select.SELECT_READ
 local SELECT_WRITE <const> = select.SELECT_WRITE
@@ -168,7 +170,56 @@ function listen:close()
     self.shutdown_r = true
     close(self)
 end
-local function new_listen(fd)
+
+local connect_mt = {}
+local connect = {}
+connect_mt.__index = connect
+function connect_mt:__newindex(name, func)
+    if name:sub(1, 3) == "on_" then
+        self._event[name:sub(4)] = func
+    end
+end
+function connect:write(data)
+    if data == "" then
+        return
+    end
+    self._writebuf = self._writebuf .. data
+end
+function connect:is_closed()
+    return self.shutdown_w
+end
+function connect:close()
+    self.shutdown_w = true
+    close(self)
+end
+
+local m = {}
+
+function m.listen(protocol, address, port)
+    local fd; do
+        local err
+        fd, err = socket.create(protocol)
+        if not fd then
+            return nil, err
+        end
+        if protocol == "unix" then
+            fs.remove(address)
+        end
+    end
+    do
+        local ok, err = fd:bind(address, port)
+        if not ok then
+            fd:close()
+            return nil, err
+        end
+    end
+    do
+        local ok, err = fd:listen()
+        if not ok then
+            fd:close()
+            return nil, err
+        end
+    end
     local s = {
         _fd = fd,
         _flags = SELECT_READ,
@@ -195,28 +246,21 @@ local function new_listen(fd)
     return setmetatable(s, listen_mt)
 end
 
-local connect_mt = {}
-local connect = {}
-connect_mt.__index = connect
-function connect_mt:__newindex(name, func)
-    if name:sub(1, 3) == "on_" then
-        self._event[name:sub(4)] = func
+function m.connect(protocol, address, port)
+    local fd; do
+        local err
+        fd, err = socket.create(protocol)
+        if not fd then
+            return nil, err
+        end
     end
-end
-function connect:write(data)
-    if data == "" then
-        return
+    do
+        local ok, err = fd:connect(address, port)
+        if ok == nil then
+            fd:close()
+            return nil, err
+        end
     end
-    self._writebuf = self._writebuf .. data
-end
-function connect:is_closed()
-    return self.shutdown_w
-end
-function connect:close()
-    self.shutdown_w = true
-    close(self)
-end
-local function new_connect(fd)
     local s = {
         _fd = fd,
         _flags = SELECT_WRITE,
@@ -236,41 +280,6 @@ local function new_connect(fd)
         end
     end)
     return setmetatable(s, connect_mt)
-end
-
-local m = {}
-
-function m.listen(protocol, ...)
-    local fd, err = socket(protocol)
-    if not fd then
-        return nil, err
-    end
-    local ok
-    ok, err = fd:bind(...)
-    if not ok then
-        fd:close()
-        return nil, err
-    end
-    ok, err = fd:listen()
-    if not ok then
-        fd:close()
-        return nil, err
-    end
-    return new_listen(fd)
-end
-
-function m.connect(protocol, ...)
-    local fd, err = socket(protocol)
-    if not fd then
-        return nil, err
-    end
-    local ok
-    ok, err = fd:connect(...)
-    if ok == nil then
-        fd:close()
-        return nil, err
-    end
-    return new_connect(fd)
 end
 
 function m.update(timeout)
