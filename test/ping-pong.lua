@@ -3,7 +3,7 @@ local net = require "net"
 local PORT = 12306
 
 local server = assert(net.listen("tcp", "127.0.0.1", PORT))
-function server:on_accept(s)
+function server:on_accepted(s)
     print "[Listen][accept]"
     s:write "Ping"
     function s:on_data(data)
@@ -16,6 +16,7 @@ function server:on_accept(s)
     function s:on_error(...)
         print("[Server][error]", ...)
     end
+    return true
 end
 function server:on_close()
     print "[Listen][close]"
@@ -25,7 +26,7 @@ function server:on_error(...)
 end
 
 local client = assert(net.connect("tcp", "127.0.0.1", PORT))
-function client:on_connect()
+function client:on_connected()
     print("[Client][connect]")
 end
 function client:on_data(data)
