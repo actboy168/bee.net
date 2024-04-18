@@ -210,7 +210,7 @@ function m.listen(protocol, address, port)
                     update_stream(new_s, event)
                 end)
             else
-                new_fd:close()
+                new_s:close()
             end
         end
     end)
