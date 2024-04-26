@@ -1,3 +1,5 @@
+package.path = package.path .. ";callback/?.lua"
+
 local net = require "net"
 
 local PORT = 12306
