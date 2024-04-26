@@ -38,7 +38,7 @@ end
 
 net.fork(server_thread)
 net.fork(client_thread)
-net.init()
+
 while net.schedule() do
     net.wait(1)
 end

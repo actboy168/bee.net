@@ -378,10 +378,6 @@ function S.close(h)
     end
 end
 
-function net.init()
-    task.dispatch(S)
-end
-
 function net.wait(timeout)
     for f, event in epfd:wait(timeout) do
         f(event)
@@ -429,5 +425,7 @@ end
 
 net.fork = task.fork
 net.schedule = task.schedule
+
+task.dispatch(S)
 
 return net
