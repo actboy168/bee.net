@@ -1,57 +1,51 @@
-local task = require "task"
+local ltask = require "ltask"
 local socket = require "bee.socket"
 local epoll = require "bee.epoll"
 
-local net = {}
-
 local epfd = epoll.create(512)
-
-local kMaxReadBufSize <const> = 4 * 1024
-
-local status = {}
-local handle = {}
 
 local EPOLLIN <const> = epoll.EPOLLIN
 local EPOLLOUT <const> = epoll.EPOLLOUT
 local EPOLLERR <const> = epoll.EPOLLERR
 local EPOLLHUP <const> = epoll.EPOLLHUP
 
-local function event_update(s)
-    local mask = 0
-    if s.event_r then
-        mask = mask | EPOLLIN
+local kMaxReadBufSize <const> = 4 * 1024
+
+local status = {}
+local handle = {}
+
+local function fd_update(s)
+    local flags = 0
+    if s.r then
+        flags = flags | EPOLLIN
     end
-    if s.event_w then
-        mask = mask | EPOLLOUT
+    if s.w then
+        flags = flags | EPOLLOUT
     end
-    if mask ~= s.event_mask then
-        epfd:event_mod(s.fd, mask)
-        s.event_mask = mask
+    if flags ~= s.event_flags then
+        epfd:event_mod(s.fd, flags)
+        s.event_flags = flags
     end
 end
 
-local function fd_set_read(fd)
-    local s = status[fd]
-    s.event_r = true
-    event_update(s)
+local function fd_set_read(s)
+    s.r = true
+    fd_update(s)
 end
 
-local function fd_clr_read(fd)
-    local s = status[fd]
-    s.event_r = false
-    event_update(s)
+local function fd_clr_read(s)
+    s.r = nil
+    fd_update(s)
 end
 
-local function fd_set_write(fd)
-    local s = status[fd]
-    s.event_w = true
-    event_update(s)
+local function fd_set_write(s)
+    s.w = true
+    fd_update(s)
 end
 
-local function fd_clr_write(fd)
-    local s = status[fd]
-    s.event_w = false
-    event_update(s)
+local function fd_clr_write(s)
+    s.w = nil
+    fd_update(s)
 end
 
 local function fd_init(fd)
@@ -61,11 +55,11 @@ local function fd_init(fd)
             e = e & (EPOLLIN | EPOLLOUT)
         end
         if e & EPOLLIN ~= 0 then
-            assert(not s.halfclose_r)
+            assert(not s.shutdown_r)
             s:on_read()
         end
         if e & EPOLLOUT ~= 0 then
-            if not s.halfclose_w then
+            if not s.shutdown_w then
                 s:on_write()
             end
         end
@@ -88,8 +82,8 @@ local function close(s)
     local fd = s.fd
     epfd:event_del(fd)
     fd:close()
-    assert(s.halfclose_r)
-    assert(s.halfclose_w)
+    assert(s.shutdown_r)
+    assert(s.shutdown_w)
     if s.wait_read then
         assert(#s.wait_read == 0)
     end
@@ -98,44 +92,44 @@ local function close(s)
     end
     if s.wait_close then
         for _, token in ipairs(s.wait_close) do
-            task.wakeup(token)
+            ltask.wakeup(token)
         end
     end
 end
 
 local function close_write(s)
-    if s.halfclose_r and s.halfclose_w then
+    if s.shutdown_r and s.shutdown_w then
         return
     end
-    if not s.halfclose_w then
-        s.halfclose_w = true
-        fd_clr_write(s.fd)
+    if not s.shutdown_w then
+        s.shutdown_w = true
+        fd_clr_write(s)
     end
-    if s.halfclose_r then
-        fd_clr_read(s.fd)
+    if s.shutdown_r then
+        fd_clr_read(s)
         close(s)
     end
 end
 
 local function close_read(s)
-    if s.halfclose_r and s.halfclose_w then
+    if s.shutdown_r and s.shutdown_w then
         return
     end
-    if not s.halfclose_r then
-        s.halfclose_r = true
-        fd_clr_read(s.fd)
+    if not s.shutdown_r then
+        s.shutdown_r = true
+        fd_clr_read(s)
         if s.wait_read then
             for i, token in ipairs(s.wait_read) do
-                task.wakeup(token)
+                ltask.wakeup(token)
                 s.wait_read[i] = nil
             end
         end
     end
-    if s.halfclose_w then
+    if s.shutdown_w then
         close(s)
     elseif not s.wait_write or #s.wait_write == 0 then
-        s.halfclose_w = true
-        fd_clr_write(s.fd)
+        s.shutdown_w = true
+        fd_clr_write(s)
         close(s)
     end
 end
@@ -155,21 +149,21 @@ local function stream_on_read(s)
             end
             local n = token[1]
             if n == nil then
-                task.wakeup(token, s.readbuf)
+                ltask.wakeup(token, s.readbuf)
                 s.readbuf = ""
                 table.remove(s.wait_read, 1)
             else
                 if n > #s.readbuf then
                     break
                 end
-                task.wakeup(token, s.readbuf:sub(1, n))
+                ltask.wakeup(token, s.readbuf:sub(1, n))
                 s.readbuf = s.readbuf:sub(n+1)
                 table.remove(s.wait_read, 1)
             end
         end
 
         if #s.readbuf > kMaxReadBufSize then
-            fd_clr_read(s.fd)
+            fd_clr_read(s)
         end
     end
 end
@@ -180,7 +174,7 @@ local function stream_on_write(s)
         local n, err = s.fd:send(data[1])
         if n == nil then
             for i, token in ipairs(s.wait_write) do
-                task.interrupt(token, err or "Write close.")
+                ltask.interrupt(token, err or "Write close.")
                 s.wait_write[i] = nil
             end
             close_write(s)
@@ -190,9 +184,9 @@ local function stream_on_write(s)
         else
             if n == #data[1] then
                 local token = table.remove(s.wait_write, 1)
-                task.wakeup(token, n)
+                ltask.wakeup(token, n)
                 if #s.wait_write == 0 then
-                    fd_clr_write(s.fd)
+                    fd_clr_write(s)
                     return
                 end
             else
@@ -204,21 +198,22 @@ local function stream_on_write(s)
 end
 
 local function create_stream(newfd)
-    status[newfd]  = {
+    local s = {
         fd = newfd,
         readbuf = "",
         wait_read = {},
         wait_write = {},
-        halfclose_r = false,
-        halfclose_w = false,
-        event_r = false,
-        event_w = false,
-        event_mask = 0,
+        shutdown_r = false,
+        shutdown_w = false,
+        r = false,
+        w = false,
+        event_flags = 0,
         on_read = stream_on_read,
         on_write = stream_on_write,
     }
+    status[newfd] = s
     fd_init(newfd)
-    fd_set_read(newfd)
+    fd_set_read(s)
     return create_handle(newfd)
 end
 
@@ -239,11 +234,11 @@ function S.listen(protocol, ...)
     end
     status[fd] = {
         fd = fd,
-        halfclose_r = false,
-        halfclose_w = true,
-        event_r = false,
-        event_w = false,
-        event_mask = 0,
+        shutdown_r = false,
+        shutdown_w = true,
+        r = false,
+        w = false,
+        event_flags = 0,
     }
     fd_init(fd)
     return create_handle(fd)
@@ -264,9 +259,9 @@ end
 function S.accept(h)
     local fd = assert(handle[h], "Invalid fd.")
     local s = status[fd]
-    s.on_read = task.wakeup
-    fd_set_read(fd)
-    task.wait(s)
+    s.on_read = ltask.wakeup
+    fd_set_read(s)
+    ltask.wait(s)
     local newfd, err = fd:accept()
     if not newfd then
         return nil, err
@@ -285,21 +280,21 @@ function S.send(h, data)
         error "Write not allowed."
         return
     end
-    if s.halfclose_w then
+    if s.shutdown_w then
         return
     end
     if data == "" then
         return 0
     end
     if #s.wait_write == 0 then
-        fd_set_write(fd)
+        fd_set_write(s)
     end
 
     local token = {
         data,
     }
     s.wait_write[#s.wait_write+1] = token
-    return task.wait(token)
+    return ltask.wait(token)
 end
 
 function S.recv(h, n)
@@ -309,7 +304,7 @@ function S.recv(h, n)
         error "Read not allowed."
         return
     end
-    if s.halfclose_r then
+    if s.shutdown_r then
         if not n then
             if s.readbuf == "" then
                 return
@@ -329,11 +324,11 @@ function S.recv(h, n)
             local token = {
             }
             s.wait_read[#s.wait_read+1] = token
-            return task.wait(token)
+            return ltask.wait(token)
         end
         local ret = s.readbuf
         if sz > kMaxReadBufSize then
-            fd_set_read(s.fd)
+            fd_set_read(s)
         end
         s.readbuf = ""
         return ret
@@ -344,7 +339,7 @@ function S.recv(h, n)
         if n <= sz then
             local ret = s.readbuf:sub(1, n)
             if sz > kMaxReadBufSize and sz - n <= kMaxReadBufSize then
-                fd_set_read(s.fd)
+                fd_set_read(s)
             end
             s.readbuf = s.readbuf:sub(n+1)
             return ret
@@ -353,7 +348,7 @@ function S.recv(h, n)
                 n,
             }
             s.wait_read[#s.wait_read+1] = token
-            return task.wait(token)
+            return ltask.wait(token)
         end
     end
 end
@@ -363,14 +358,14 @@ function S.close(h)
     if fd then
         local s = status[fd]
         close_read(s)
-        if not s.halfclose_w then
+        if not s.shutdown_w then
             local token = {}
             if s.wait_close then
                 s.wait_close[#s.wait_close+1] = token
             else
                 s.wait_close = {token}
             end
-            task.wait(token)
+            ltask.wait(token)
         end
         handle[h] = nil
         handle[fd] = nil
@@ -378,17 +373,11 @@ function S.close(h)
     end
 end
 
-function net.wait(timeout)
-    for f, event in epfd:wait(timeout) do
-        f(event)
-    end
-end
-
 local fd_mt = {}
 fd_mt.__index = fd_mt
 
 function fd_mt:accept(...)
-    local fd, err = task.call("accept", self.fd, ...)
+    local fd, err = ltask.call("accept", self.fd, ...)
     if not fd then
         return nil, err
     end
@@ -396,19 +385,27 @@ function fd_mt:accept(...)
 end
 
 function fd_mt:send(...)
-    return task.call("send", self.fd, ...)
+    return ltask.call("send", self.fd, ...)
 end
 
 function fd_mt:recv(...)
-    return task.call("recv", self.fd, ...)
+    return ltask.call("recv", self.fd, ...)
 end
 
 function fd_mt:close(...)
-    return task.call("close", self.fd, ...)
+    return ltask.call("close", self.fd, ...)
+end
+
+local net = {}
+
+function net.wait(timeout)
+    for f, event in epfd:wait(timeout) do
+        f(event)
+    end
 end
 
 function net.listen(...)
-    local fd, err = task.call("listen", ...)
+    local fd, err = ltask.call("listen", ...)
     if not fd then
         return nil, err
     end
@@ -416,16 +413,16 @@ function net.listen(...)
 end
 
 function net.connect(...)
-    local fd, err = task.call("connect", ...)
+    local fd, err = ltask.call("connect", ...)
     if not fd then
         return nil, err
     end
     return setmetatable({ fd = fd }, fd_mt)
 end
 
-net.fork = task.fork
-net.schedule = task.schedule
+net.fork = ltask.fork
+net.schedule = ltask.schedule
 
-task.dispatch(S)
+ltask.dispatch(S)
 
 return net

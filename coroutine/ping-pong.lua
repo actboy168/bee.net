@@ -1,6 +1,5 @@
 package.path = package.path .. ";coroutine/?.lua"
 
-local task = require "task"
 local net = require "net"
 
 local PORT = 12306
@@ -9,7 +8,7 @@ local function server_thread()
     local severfd = assert(net.listen("tcp", "127.0.0.1", PORT))
     while true do
         local clientfd = assert(severfd:accept())
-        task.fork(function ()
+        net.fork(function ()
             while true do
                 local data = clientfd:recv(4)
                 print("server recv: "..data)
