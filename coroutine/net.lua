@@ -52,7 +52,7 @@ local function fd_init(fd)
     local s = status[fd]
     local function on_event(e)
         if e & (EPOLLERR | EPOLLHUP) ~= 0 then
-            e = e & (EPOLLIN | EPOLLOUT)
+            e = e | EPOLLIN | EPOLLOUT
         end
         if e & EPOLLIN ~= 0 then
             assert(not s.shutdown_r)
