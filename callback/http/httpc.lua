@@ -43,11 +43,6 @@ local function gen_interface(protocol, fd)
             rbuf = ""
             return r
         else
-            if #rbuf >= sz then
-                local r = rbuf:sub(1, sz)
-                rbuf = rbuf:sub(sz + 1)
-                return r
-            end
             repeat
                 if #rbuf >= sz then
                     local r = rbuf:sub(1, sz)
