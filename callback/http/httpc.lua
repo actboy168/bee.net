@@ -14,23 +14,25 @@ local function check_protocol(host)
     if protocol then
         host = string.gsub(host, "^" .. protocol, "")
         protocol = string.lower(protocol)
-        if protocol == "https://" then
-            return "https", host
-        elseif protocol == "http://" then
-            return "http", host
-        else
+        if protocol ~= "http://" then
             error(string.format("Invalid protocol: %s", protocol))
         end
-    else
-        return "http", host
     end
+    local hostaddr, port = host:match "([^:]+):?(%d*)$"
+    if port == "" then
+        port = 80
+    else
+        port = tonumber(port)
+    end
+    return host, hostaddr, port
 end
 
-local function gen_interface(protocol, fd)
-    if protocol ~= "http" then
-        error(string.format("Invalid protocol: %s", protocol))
+local function connect(hostname)
+    local host, hostaddr, port = check_protocol(hostname)
+    local fd = net.connect("tcp", hostaddr, port)
+    if not fd then
+        error(string.format("http connect error host:%s, port:%s", hostaddr, port))
     end
-
     local rbuf = ""
     function fd:on_data(data)
         rbuf = rbuf .. data
@@ -43,15 +45,17 @@ local function gen_interface(protocol, fd)
             rbuf = ""
             return r
         else
-            repeat
+            while true do
                 if #rbuf >= sz then
                     local r = rbuf:sub(1, sz)
                     rbuf = rbuf:sub(sz + 1)
                     return r
                 end
+                if fd:is_closed() then
+                    return ""
+                end
                 net.update()
-            until fd:is_closed()
-            return ""
+            end
         end
     end
     local function write(data)
@@ -65,52 +69,25 @@ local function gen_interface(protocol, fd)
         rbuf = ""
         return r
     end
+    local function close()
+        fd:close()
+    end
     return {
-        init = nil,
-        close = nil,
         read = read,
         write = write,
         readall = readall,
-    }
-end
-
-local function connect(host)
-    local protocol
-    protocol, host = check_protocol(host)
-    local hostaddr, port = host:match "([^:]+):?(%d*)$"
-    if port == "" then
-        port = protocol == "http" and 80 or protocol == "https" and 443
-    else
-        port = tonumber(port)
-    end
-    local fd = net.connect("tcp", hostaddr, port)
-    if not fd then
-        error(string.format("%s connect error host:%s, port:%s", protocol, hostaddr, port))
-    end
-    local interface = gen_interface(protocol, fd)
-    if interface.init then
-        interface.init(host)
-    end
-    return fd, interface, host
-end
-
-local function close_interface(interface, fd)
-    interface.finish = true
-    fd:close()
-    if interface.close then
-        interface.close()
-        interface.close = nil
-    end
+        close = close,
+    }, host
 end
 
 function httpc.request(method, hostname, url, recvheader, header, content)
-    local fd, interface, host = connect(hostname)
+    local interface, host = connect(hostname)
     local ok, statuscode, body, header = pcall(internal.request, interface, method, host, url, recvheader, header,
         content)
     if ok then
         ok, body = pcall(internal.response, interface, statuscode, body, header)
     end
-    close_interface(interface, fd)
+    interface.close()
     if ok then
         return statuscode, body
     else
@@ -119,9 +96,9 @@ function httpc.request(method, hostname, url, recvheader, header, content)
 end
 
 function httpc.head(hostname, url, recvheader, header, content)
-    local fd, interface, host = connect(hostname)
+    local interface, host = connect(hostname)
     local ok, statuscode = pcall(internal.request, interface, "HEAD", host, url, recvheader, header, content)
-    close_interface(interface, fd)
+    interface.close()
     if ok then
         return statuscode
     else
@@ -130,18 +107,16 @@ function httpc.head(hostname, url, recvheader, header, content)
 end
 
 function httpc.request_stream(method, hostname, url, recvheader, header, content)
-    local fd, interface, host = connect(hostname)
+    local interface, host = connect(hostname)
     local ok, statuscode, body, header = pcall(internal.request, interface, method, host, url, recvheader, header,
         content)
-    interface.finish = true -- don't shutdown fd in timeout
     local function close_fd()
-        close_interface(interface, fd)
+        interface.close()
     end
     if not ok then
         close_fd()
         error(statuscode)
     end
-    -- todo: stream support timeout
     local stream = internal.response_stream(interface, statuscode, body, header)
     stream._onclose = close_fd
     return stream
