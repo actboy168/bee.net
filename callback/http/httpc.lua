@@ -110,15 +110,12 @@ function httpc.request_stream(method, hostname, url, recvheader, header, content
     local interface, host = connect(hostname)
     local ok, statuscode, body, header = pcall(internal.request, interface, method, host, url, recvheader, header,
         content)
-    local function close_fd()
-        interface.close()
-    end
     if not ok then
-        close_fd()
+        interface.close()
         error(statuscode)
     end
     local stream = internal.response_stream(interface, statuscode, body, header)
-    stream._onclose = close_fd
+    stream._onclose = interface.close
     return stream
 end
 
@@ -140,7 +137,6 @@ function httpc.post(host, url, form, recvheader)
     for k, v in pairs(form) do
         table.insert(body, string.format("%s=%s", escape(k), escape(v)))
     end
-
     return httpc.request("POST", host, url, recvheader, header, table.concat(body, "&"))
 end
 
