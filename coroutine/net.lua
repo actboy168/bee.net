@@ -157,7 +157,7 @@ local function stream_on_read(s)
                     break
                 end
                 ltask.wakeup(token, s.readbuf:sub(1, n))
-                s.readbuf = s.readbuf:sub(n+1)
+                s.readbuf = s.readbuf:sub(n + 1)
                 table.remove(s.wait_read, 1)
             end
         end
@@ -293,7 +293,7 @@ function S.send(h, data)
     local token = {
         data,
     }
-    s.wait_write[#s.wait_write+1] = token
+    s.wait_write[#s.wait_write + 1] = token
     return ltask.wait(token)
 end
 
@@ -323,7 +323,7 @@ function S.recv(h, n)
         if sz == 0 then
             local token = {
             }
-            s.wait_read[#s.wait_read+1] = token
+            s.wait_read[#s.wait_read + 1] = token
             return ltask.wait(token)
         end
         local ret = s.readbuf
@@ -341,13 +341,13 @@ function S.recv(h, n)
             if sz > kMaxReadBufSize and sz - n <= kMaxReadBufSize then
                 fd_set_read(s)
             end
-            s.readbuf = s.readbuf:sub(n+1)
+            s.readbuf = s.readbuf:sub(n + 1)
             return ret
         else
             local token = {
                 n,
             }
-            s.wait_read[#s.wait_read+1] = token
+            s.wait_read[#s.wait_read + 1] = token
             return ltask.wait(token)
         end
     end
@@ -361,15 +361,23 @@ function S.close(h)
         if not s.shutdown_w then
             local token = {}
             if s.wait_close then
-                s.wait_close[#s.wait_close+1] = token
+                s.wait_close[#s.wait_close + 1] = token
             else
-                s.wait_close = {token}
+                s.wait_close = { token }
             end
             ltask.wait(token)
         end
         handle[h] = nil
         handle[fd] = nil
         status[fd] = nil
+    end
+end
+
+function S.is_closed(h)
+    local fd = handle[h]
+    if fd then
+        local s = status[fd]
+        return s.shutdown_w and s.shutdown_r
     end
 end
 
@@ -394,6 +402,10 @@ end
 
 function fd_mt:close(...)
     return ltask.call("close", self.fd, ...)
+end
+
+function fd_mt:is_closed(...)
+    return ltask.call("is_closed", self.fd, ...)
 end
 
 local net = {}
@@ -422,6 +434,7 @@ end
 
 net.fork = ltask.fork
 net.schedule = ltask.schedule
+net.yield = ltask.yield
 
 ltask.dispatch(S)
 
