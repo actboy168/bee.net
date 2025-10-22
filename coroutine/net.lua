@@ -29,6 +29,9 @@ local function fd_update(s)
 end
 
 local function fd_set_read(s)
+    if s.shutdown_r then
+        return
+    end
     s.r = true
     fd_update(s)
 end
@@ -39,6 +42,9 @@ local function fd_clr_read(s)
 end
 
 local function fd_set_write(s)
+    if s.shutdown_w then
+        return
+    end
     s.w = true
     fd_update(s)
 end
@@ -310,9 +316,6 @@ function S.recv(h, n)
                 return
             end
         else
-            if n > kMaxReadBufSize then
-                n = kMaxReadBufSize
-            end
             if n > #s.readbuf then
                 return
             end
@@ -333,9 +336,6 @@ function S.recv(h, n)
         s.readbuf = ""
         return ret
     else
-        if n > kMaxReadBufSize then
-            n = kMaxReadBufSize
-        end
         if n <= sz then
             local ret = s.readbuf:sub(1, n)
             if sz > kMaxReadBufSize and sz - n <= kMaxReadBufSize then
@@ -344,11 +344,30 @@ function S.recv(h, n)
             s.readbuf = s.readbuf:sub(n + 1)
             return ret
         else
-            local token = {
-                n,
-            }
+            if n <= kMaxReadBufSize then
+                local token = { n }
+                s.wait_read[#s.wait_read + 1] = token
+                return ltask.wait(token)
+            end
+            local retval = s.readbuf
+            s.readbuf = ""
+            fd_set_read(s)
+            for _ = 1, (n - sz) // kMaxReadBufSize do
+                local token = { kMaxReadBufSize }
+                s.wait_read[#s.wait_read + 1] = token
+                local r = ltask.wait(token)
+                if not r then
+                    return
+                end
+                retval = retval .. r
+            end
+            local token = { (n - sz) % kMaxReadBufSize }
             s.wait_read[#s.wait_read + 1] = token
-            return ltask.wait(token)
+            local r = ltask.wait(token)
+            if not r then
+                return
+            end
+            return retval .. r
         end
     end
 end
