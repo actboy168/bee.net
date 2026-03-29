@@ -250,12 +250,35 @@ function S.listen(protocol, ...)
     return create_handle(fd)
 end
 
-function S.connect(protocol, ...)
+function S.connect(protocol, host, port)
+    -- 如果传入了 host 和 port，先通过 DNS 解析获取 endpoint
+    -- 然后根据解析结果的地址族自动选择正确的协议（tcp/tcp6）
+    local ep
+    if host and port then
+        ep = socket.endpoint("hostname", host, port)
+        if not ep then
+            return nil, string.format("resolve hostname failed: %s:%d", host, port)
+        end
+        -- 根据 endpoint 的地址族选择正确的协议
+        local _, _, family = ep:value()
+        if family == "inet6" then
+            if protocol == "tcp" then
+                protocol = "tcp6"
+            elseif protocol == "udp" then
+                protocol = "udp6"
+            end
+        end
+    end
     local fd, err = socket.create(protocol)
     if not fd then
         return nil, err
     end
-    local r, err = fd:connect(...)
+    local r, err
+    if ep then
+        r, err = fd:connect(ep)
+    else
+        r, err = fd:connect(host, port)
+    end
     if r == nil then
         return nil, err
     end
