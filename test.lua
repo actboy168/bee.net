@@ -3,7 +3,7 @@ local httpc = require "http.httpc"
 
 net.fork(function()
     local respheader = {}
-    local status, body = httpc.get("https://www.baidu.com", "/", respheader)
+    local status, body = httpc.request("GET", "https://www.baidu.com", "/", respheader)
     print(status, body)
 end)
 
