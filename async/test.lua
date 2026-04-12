@@ -1,3 +1,6 @@
+package.cpath = "./../../bee.lua/build/bin/?.so;./../build/bin/?.so"
+package.path = "./?.lua;./http/?.lua"
+
 local net = require "net"
 local httpc = require "http.httpc"
 
