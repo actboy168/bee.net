@@ -1,7 +1,7 @@
 /*
- * tls_openssl.c - TLS 模块，基于 OpenSSL 实现（非 Windows 平台）
- * 提供与 tls_windows.c 完全一致的 Lua 接口
- */
+* tls_openssl.c - TLS 模块，基于 OpenSSL 实现（非 Windows 平台）
+* 提供与 tls_windows.c 完全一致的 Lua 接口
+*/
 
 #include <stdbool.h>
 #include <string.h>
